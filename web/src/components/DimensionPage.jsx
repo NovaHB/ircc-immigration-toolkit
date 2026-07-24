@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ResponsiveContainer,
   BarChart,
@@ -16,9 +16,10 @@ import { useLayout } from '../layoutContext'
 import { MONTHS, PROVINCES, YEARS } from '../data/mockData'
 import {
   DIMENSION_API,
-  fetchAdmissionsPages,
-  getShareTrend,
-  getTopValues,
+  fetchAdmissions,
+  fetchShareTrend,
+  fetchSummary,
+  fetchTopValues,
   mapRows,
 } from '../api/admissions'
 
@@ -40,7 +41,7 @@ function ChartTooltip({ active, payload, label }) {
   )
 }
 
-function StatusBanner({ loading, error, rowCount }) {
+function StatusBanner({ loading, error, summary, tableCount }) {
   if (loading) {
     return (
       <div className="border border-outline-variant bg-white px-4 py-3 font-body-md text-secondary">
@@ -55,10 +56,14 @@ function StatusBanner({ loading, error, rowCount }) {
       </div>
     )
   }
+  const total = summary?.total_admissions
+  const distinct = summary?.distinct_values
   return (
     <div className="border border-outline-variant bg-white px-4 py-2 font-caption text-caption text-secondary">
-      Showing {rowCount.toLocaleString()} rows from the live API
-      {rowCount >= 1000 ? ' (paginated sample — refine filters for a fuller slice)' : ''}.
+      Charts use full-mart top ranks (ORDER BY total admissions). Table shows the top{' '}
+      {tableCount.toLocaleString()} individual rows by admissions
+      {total != null ? ` · mart total ${Number(total).toLocaleString()} admissions` : ''}
+      {distinct != null ? ` · ${Number(distinct).toLocaleString()} distinct values` : ''}.
     </div>
   )
 }
@@ -71,7 +76,10 @@ export default function DimensionPage({ dimension }) {
   const [month, setMonth] = useState('')
   const [applied, setApplied] = useState({ province: '', year: '', month: '' })
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [rows, setRows] = useState([])
+  const [topValues, setTopValues] = useState([])
+  const [trend, setTrend] = useState([])
+  const [tableRows, setTableRows] = useState([])
+  const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -89,14 +97,27 @@ export default function DimensionPage({ dimension }) {
       if (applied.year !== '') filters.year = Number(applied.year)
       if (applied.month !== '') filters.month = Number(applied.month)
 
-      const maxPages = applied.province || applied.year || applied.month ? 5 : 1
-      const raw = await fetchAdmissionsPages(apiMeta.endpoint, filters, {
-        pageSize: 1000,
-        maxPages,
-      })
-      setRows(mapRows(raw, apiMeta.valueField))
+      // Parallel: true top-N + trend + summary (full-mart SQL) and highest rows for table.
+      const [tops, trendRows, summaryRow, detailRaw] = await Promise.all([
+        fetchTopValues(apiMeta.endpoint, filters, 10),
+        fetchShareTrend(apiMeta.endpoint, filters),
+        fetchSummary(apiMeta.endpoint, filters),
+        fetchAdmissions(apiMeta.endpoint, {
+          ...filters,
+          limit: 50,
+          offset: 0,
+          sort: 'admissions',
+        }),
+      ])
+      setTopValues(tops)
+      setTrend(trendRows)
+      setSummary(summaryRow)
+      setTableRows(mapRows(detailRaw, apiMeta.valueField).slice(0, 12))
     } catch (err) {
-      setRows([])
+      setTopValues([])
+      setTrend([])
+      setTableRows([])
+      setSummary(null)
       setError(err.message || String(err))
     } finally {
       setLoading(false)
@@ -107,17 +128,8 @@ export default function DimensionPage({ dimension }) {
     load()
   }, [load])
 
-  const topValues = useMemo(() => getTopValues(rows, 8), [rows])
-  const trend = useMemo(() => getShareTrend(rows), [rows])
-  const tableRows = useMemo(
-    () => [...rows].sort((a, b) => b.admissions_count - a.admissions_count).slice(0, 12),
-    [rows],
-  )
-  const uniqueValues = useMemo(() => new Set(rows.map((r) => r.dimension_value)).size, [rows])
-  const totalAdmissions = useMemo(
-    () => rows.reduce((s, r) => s + r.admissions_count, 0),
-    [rows],
-  )
+  const uniqueValues = summary?.distinct_values ?? 0
+  const totalAdmissions = summary?.total_admissions ?? 0
   const maxTop = Math.max(...topValues.map((t) => t.total), 1)
 
   const applyFilters = () => {
@@ -234,7 +246,12 @@ export default function DimensionPage({ dimension }) {
           {filterControls}
         </section>
 
-        <StatusBanner loading={loading} error={error} rowCount={rows.length} />
+        <StatusBanner
+          loading={loading}
+          error={error}
+          summary={summary}
+          tableCount={tableRows.length}
+        />
 
         {/* Mobile metric tiles (Stitch category mobile) */}
         <section className="grid grid-cols-2 gap-3 md:hidden">
