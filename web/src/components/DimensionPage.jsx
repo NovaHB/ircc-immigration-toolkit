@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  LineChart,
-  Line,
-} from 'recharts'
+import { ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line } from 'recharts'
 import Header from './Header'
 import { useLayout } from '../layoutContext'
 import { MONTHS, PROVINCES, YEARS } from '../data/mockData'
@@ -23,9 +12,9 @@ import {
   mapRows,
 } from '../api/admissions'
 
-const BAR_COLORS = ['#000000', '#5e5e5e', '#000000', '#5e5e5e', '#d4d4d4']
 const AXIS_TICK = { fontFamily: 'Inter', fontSize: 11, fill: '#5e5e5e' }
 const MONTH_NAMES = MONTHS
+const BAR_FILLS = ['bg-primary', 'bg-secondary', 'bg-primary', 'bg-secondary', 'bg-outline']
 
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
@@ -37,6 +26,48 @@ function ChartTooltip({ active, payload, label }) {
           {entry.name}: {Number(entry.value).toLocaleString()}
         </p>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Ranked horizontal bars — avoids Recharts Y-axis clipping of the first label
+ * and keeps long NOC / country names fully readable (wrap, not jam).
+ */
+function RankedBarList({ items, maxTotal }) {
+  const max = maxTotal > 0 ? maxTotal : 1
+  return (
+    <div className="space-y-5">
+      {items.map((item, index) => {
+        const pct = Math.max(2, Math.round((item.total / max) * 100))
+        return (
+          <div key={`${item.name}-${index}`} className="space-y-2">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <span className="mr-2 inline-block w-5 shrink-0 font-label-sm text-label-sm text-secondary">
+                  {index + 1}.
+                </span>
+                <span className="font-body-md text-body-md font-medium leading-snug text-primary break-words">
+                  {item.name}
+                </span>
+              </div>
+              <span className="shrink-0 pt-0.5 font-data-mono text-data-mono font-bold tabular-nums text-primary">
+                {item.total.toLocaleString()}
+              </span>
+            </div>
+            <div className="h-3 w-full bg-surface-container-highest">
+              <div
+                className={`h-full ${BAR_FILLS[index % BAR_FILLS.length]} transition-[width] duration-300`}
+                style={{ width: `${pct}%` }}
+                title={`${item.name}: ${item.total.toLocaleString()}`}
+              />
+            </div>
+          </div>
+        )
+      })}
+      {items.length === 0 && (
+        <p className="font-body-md text-secondary">No values for the current filters.</p>
+      )}
     </div>
   )
 }
@@ -99,7 +130,7 @@ export default function DimensionPage({ dimension }) {
 
       // Parallel: true top-N + trend + summary (full-mart SQL) and highest rows for table.
       const [tops, trendRows, summaryRow, detailRaw] = await Promise.all([
-        fetchTopValues(apiMeta.endpoint, filters, 10),
+        fetchTopValues(apiMeta.endpoint, filters, 8),
         fetchShareTrend(apiMeta.endpoint, filters),
         fetchSummary(apiMeta.endpoint, filters),
         fetchAdmissions(apiMeta.endpoint, {
@@ -273,102 +304,29 @@ export default function DimensionPage({ dimension }) {
           </div>
         </section>
 
-        {/* Mobile: horizontal progress bars (Stitch). Desktop: Recharts 60/40. */}
-        <section className="border border-outline-variant bg-surface-container-lowest p-4 md:hidden">
-          <div className="mb-6 flex items-center justify-between">
-            <h3 className="font-headline-sm text-headline-sm text-primary">
-              Top {dimension.valueLabel}
-            </h3>
-            <span className="material-symbols-outlined text-secondary">bar_chart</span>
-          </div>
-          <div className="space-y-4">
-            {topValues.map((item) => (
-              <div key={item.name} className="space-y-1">
-                <div className="flex justify-between gap-3 font-label-sm text-label-sm">
-                  <span className="truncate pr-2">{item.name}</span>
-                  <span className="shrink-0 font-data-mono font-bold">{item.total.toLocaleString()}</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-surface-container-highest">
-                  <div
-                    className="h-full bg-primary"
-                    style={{ width: `${Math.max(4, Math.round((item.total / maxTop) * 100))}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-            {!loading && topValues.length === 0 && (
-              <p className="font-body-md text-secondary">No values for the current filters.</p>
-            )}
-          </div>
-        </section>
-
-        <section className="border border-outline-variant bg-surface-container-lowest p-4 md:hidden">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-headline-sm text-headline-sm text-primary">Admission Trend</h3>
-              <span className="font-label-sm text-label-sm text-secondary">Share of top value (loaded rows)</span>
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={trend}>
-              <CartesianGrid stroke="#f5f5f5" vertical={false} />
-              <XAxis dataKey="month" tick={AXIS_TICK} axisLine={{ stroke: '#c4c7c7' }} tickLine={false} />
-              <YAxis hide domain={[0, 100]} />
-              <Tooltip content={<ChartTooltip />} />
-              <Line type="monotone" dataKey="share" name="Top value" stroke="#000000" strokeWidth={2} dot={false} />
-              <Line
-                type="monotone"
-                dataKey="nationalAvg"
-                name="National avg"
-                stroke="#5e5e5e"
-                strokeWidth={1.5}
-                strokeDasharray="4 4"
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </section>
-
-        {/* Desktop charts */}
-        <section className="hidden grid-cols-1 gap-stack_lg lg:grid lg:grid-cols-12">
-          <div className="border border-outline-variant bg-white p-6 lg:col-span-7">
-            <div className="mb-6 flex items-start justify-between">
+        {/* Top ranks + trend — list bars (not Recharts category axis) so #1 label
+            and long NOC names stay fully visible on every breakpoint. */}
+        <section className="grid grid-cols-1 gap-stack_lg lg:grid-cols-12">
+          <div className="border border-outline-variant bg-white p-4 sm:p-6 lg:col-span-7">
+            <div className="mb-6 flex items-start justify-between gap-3">
               <h3 className="font-headline-sm text-headline-sm uppercase text-primary">
                 Admissions by {dimension.valueLabel}
               </h3>
-              <span className="material-symbols-outlined text-secondary">more_horiz</span>
+              <span className="material-symbols-outlined shrink-0 text-secondary">bar_chart</span>
             </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={topValues} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <CartesianGrid stroke="#f5f5f5" horizontal={false} />
-                <XAxis type="number" tick={AXIS_TICK} axisLine={{ stroke: '#c4c7c7' }} tickLine={false} />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={120}
-                  tick={AXIS_TICK}
-                  axisLine={{ stroke: '#c4c7c7' }}
-                  tickLine={false}
-                />
-                <Tooltip content={<ChartTooltip />} cursor={{ fill: '#f5f5f5' }} />
-                <Bar dataKey="total" name="Admissions" radius={0}>
-                  {topValues.map((_, index) => (
-                    <Cell key={index} fill={BAR_COLORS[index % BAR_COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <RankedBarList items={topValues} maxTotal={maxTop} />
           </div>
 
-          <div className="flex flex-col border border-outline-variant bg-white p-6 lg:col-span-5">
+          <div className="flex flex-col border border-outline-variant bg-white p-4 sm:p-6 lg:col-span-5">
             <h3 className="font-headline-sm text-headline-sm uppercase text-primary">
               {dimension.valueLabel} Share Trend
             </h3>
             <p className="mb-4 font-caption text-caption text-secondary">
-              Percentage of total admissions over recent months (from loaded rows)
+              Share of the #1 value vs average across recent months
+              {topValues[0] ? ` (top: ${topValues[0].name})` : ''}
             </p>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={trend}>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={trend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke="#f5f5f5" vertical={false} />
                 <XAxis dataKey="month" tick={AXIS_TICK} axisLine={{ stroke: '#c4c7c7' }} tickLine={false} />
                 <YAxis hide domain={[0, 100]} />
@@ -385,6 +343,16 @@ export default function DimensionPage({ dimension }) {
                 />
               </LineChart>
             </ResponsiveContainer>
+            <div className="mt-4 flex flex-wrap gap-4">
+              <div className="flex items-center gap-2">
+                <span className="h-3 w-3 bg-primary" />
+                <span className="font-label-sm text-label-sm">Top value share</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="h-3 w-3 border border-secondary bg-white" />
+                <span className="font-label-sm text-label-sm text-secondary">Period average</span>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -471,7 +439,9 @@ export default function DimensionPage({ dimension }) {
                     }
                   >
                     <td className="px-6 py-4 font-body-md">{row.province}</td>
-                    <td className="px-6 py-4 font-body-md">{row.dimension_value}</td>
+                    <td className="max-w-md px-6 py-4 font-body-md leading-snug break-words">
+                      {row.dimension_value}
+                    </td>
                     <td className="px-6 py-4 font-data-mono text-data-mono">{row.year}</td>
                     <td className="px-6 py-4 font-data-mono text-data-mono">{row.month}</td>
                     <td className="px-6 py-4 text-right font-data-mono text-data-mono">
