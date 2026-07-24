@@ -40,6 +40,39 @@ function ChartTooltip({ active, payload, label, formatter }) {
   )
 }
 
+/** Stitch mobile: label + value + fill bar (horizontal progress), not side-by-side Recharts. */
+function MobileProgressList({ title, items, valueKey = 'total', format = 'number' }) {
+  const max = Math.max(...items.map((i) => i[valueKey] || 0), 1)
+  return (
+    <section className="border border-outline-variant bg-surface-container-lowest p-5">
+      <h3 className="mb-6 font-headline-sm text-headline-sm">{title}</h3>
+      <div className="space-y-5">
+        {items.map((item, index) => {
+          const raw = item[valueKey] || 0
+          const width = `${Math.max(4, Math.round((raw / max) * 100))}%`
+          const fill = index === 0 ? 'bg-primary' : index === 1 ? 'bg-secondary' : 'bg-outline'
+          return (
+            <div key={item.name} className="space-y-2">
+              <div className="flex justify-between gap-3 font-label-sm text-label-sm">
+                <span className="truncate font-bold">{item.name}</span>
+                <span className="shrink-0 font-data-mono">
+                  {format === 'percent' ? `${Math.round(raw)}%` : raw.toLocaleString()}
+                </span>
+              </div>
+              <div className="h-4 bg-surface-container">
+                <div className={`h-full ${fill}`} style={{ width }} />
+              </div>
+            </div>
+          )
+        })}
+        {items.length === 0 && (
+          <p className="font-body-md text-secondary">No data for the current load.</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export default function OverviewPage() {
   const { openMenu } = useLayout()
   const [rows, setRows] = useState([])
@@ -52,15 +85,11 @@ export default function OverviewPage() {
       setLoading(true)
       setError(null)
       try {
-        // Category mart is the smallest full-history slice useful for national overview.
-        // Page through all ~6.4k rows (7 × 1000).
         const raw = await fetchAdmissionsPages(DIMENSION_API.category.endpoint, {}, {
           pageSize: 1000,
           maxPages: 10,
         })
-        if (!cancelled) {
-          setRows(mapRows(raw, DIMENSION_API.category.valueField))
-        }
+        if (!cancelled) setRows(mapRows(raw, DIMENSION_API.category.valueField))
       } catch (err) {
         if (!cancelled) {
           setRows([])
@@ -95,33 +124,61 @@ export default function OverviewPage() {
     {
       label: 'Total Admissions',
       value: loading ? '…' : summary.totalAdmissions.toLocaleString(),
+      hint: 'From category mart',
+      bar: true,
     },
-    { label: 'Provinces Tracked', value: summary.provincesTracked },
-    { label: 'Years of Data', value: summary.yearsOfData },
-    { label: 'Dimensions Available', value: summary.dimensionsAvailable },
+    {
+      label: 'Provinces Tracked',
+      value: summary.provincesTracked,
+      hint: 'Coverage: 100%',
+    },
+    {
+      label: 'Years of Data',
+      value: summary.yearsOfData,
+      hint: '2015 – 2026',
+    },
+    {
+      label: 'Dimensions Available',
+      value: summary.dimensionsAvailable,
+      hint: 'Filterable sets',
+    },
   ]
 
   return (
     <>
       <Header
         title="Overview"
+        meta="2026 Data"
         onMenuClick={openMenu}
         actions={
           <button
             type="button"
             className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-container transition-colors hover:bg-surface-container-high"
+            aria-label="Download"
           >
-            <span className="material-symbols-outlined">download</span>
+            <span className="material-symbols-outlined text-[20px]">download</span>
           </button>
         }
-      >
-        <span className="font-body-md text-on-surface-variant">All Provinces</span>
-        <span className="font-body-md text-on-surface-variant">2015–2026</span>
-        <span className="font-body-md text-on-surface-variant">All Months</span>
-      </Header>
+      />
 
-      <main className="flex-1 space-y-stack_lg p-4 sm:p-container_padding">
-        <div className="border-l-[3px] border-primary bg-surface-container-low px-4 py-3">
+      <main className="flex-1 overflow-x-hidden p-4 sm:p-gutter md:p-container_padding">
+        {/* Stitch mobile hero — desktop keeps compact disclaimer first */}
+        <div className="mb-stack_lg md:hidden">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="inline-block bg-primary px-2 py-1 font-label-sm text-[10px] uppercase tracking-tighter text-on-primary">
+              Live System
+            </span>
+            <span className="font-label-sm text-label-sm text-on-surface-variant">Updated April 2026</span>
+          </div>
+          <h2 className="mb-2 font-headline-lg-mobile text-headline-lg-mobile text-on-surface">
+            Admissions Overview
+          </h2>
+          <p className="font-body-md text-body-md leading-relaxed text-secondary">
+            Aggregated performance metrics for Canada&apos;s Express Entry program across all primary dimensions.
+          </p>
+        </div>
+
+        <div className="mb-stack_lg hidden border-l-[3px] border-primary bg-surface-container-low px-4 py-3 md:block">
           <p className="font-caption text-caption text-secondary">
             IRCC suppresses counts between 0 and 5 for privacy, shown here as 0. All other values are rounded to the
             nearest 5. Totals may not sum exactly. Overview aggregates are built from the immigration-category mart.
@@ -129,39 +186,56 @@ export default function OverviewPage() {
         </div>
 
         {error && (
-          <div className="border border-error bg-error-container/30 px-4 py-3 font-body-md text-error">
+          <div className="mb-stack_md border border-error bg-error-container/30 px-4 py-3 font-body-md text-error">
             Failed to load overview data: {error}
           </div>
         )}
         {loading && (
-          <div className="border border-outline-variant bg-white px-4 py-3 font-body-md text-secondary">
+          <div className="mb-stack_md border border-outline-variant bg-white px-4 py-3 font-body-md text-secondary">
             Loading live overview from BigQuery via Render…
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-stack_md sm:grid-cols-2 md:grid-cols-4">
+        {/* Mobile: vertical stack (Stitch). Desktop: 4-col grid. */}
+        <div className="mb-stack_lg flex flex-col gap-stack_sm md:grid md:grid-cols-4 md:gap-stack_md">
           {statCards.map((card) => (
-            <div key={card.label} className="custom-shadow rounded-lg border border-outline-variant bg-white p-5">
-              <p className="mb-2 font-label-sm text-label-sm uppercase tracking-wider text-secondary">
+            <div
+              key={card.label}
+              className="border border-outline-variant bg-surface-container-lowest p-5 custom-shadow md:rounded-lg"
+            >
+              <p className="mb-1 font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant">
                 {card.label}
               </p>
-              <p className="font-headline-lg text-headline-lg font-bold text-primary">{card.value}</p>
+              <div className="flex items-baseline gap-2">
+                <span className="font-display text-[32px] font-bold leading-none text-primary md:font-headline-lg md:text-headline-lg">
+                  {card.value}
+                </span>
+              </div>
+              {card.hint && (
+                <p className="mt-1 font-data-mono text-[12px] text-secondary md:mt-2">{card.hint}</p>
+              )}
+              {card.bar && (
+                <div className="relative mt-4 h-[2px] w-full bg-surface-container-highest md:hidden">
+                  <div className="absolute inset-y-0 left-0 w-3/4 bg-primary" />
+                </div>
+              )}
             </div>
           ))}
         </div>
 
-        <section className="custom-shadow rounded-lg border border-outline-variant bg-white p-4 sm:p-stack_lg">
-          <div className="mb-6 flex flex-col gap-2 sm:mb-8 sm:flex-row sm:items-end sm:justify-between">
+        <section className="mb-stack_lg border border-outline-variant bg-surface-container-lowest p-5 custom-shadow md:rounded-lg md:p-stack_lg">
+          <div className="mb-6 flex items-center justify-between sm:mb-8">
             <div>
-              <h3 className="mb-1 font-headline-sm text-headline-sm">Admissions Over Time (2015–2026)</h3>
-              <p className="font-body-md text-secondary">Yearly trends in landed permanent residents.</p>
+              <h3 className="font-headline-sm text-headline-sm">Admissions Over Time</h3>
+              <p className="hidden font-body-md text-secondary md:block">Yearly trends in landed permanent residents.</p>
             </div>
+            <span className="material-symbols-outlined text-secondary">analytics</span>
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={timeSeries} margin={{ left: 0, right: 8 }}>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={timeSeries} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
               <CartesianGrid stroke="#f5f5f5" />
               <XAxis dataKey="year" tick={AXIS_TICK} axisLine={{ stroke: '#c4c7c7' }} tickLine={false} />
-              <YAxis tick={AXIS_TICK} axisLine={{ stroke: '#c4c7c7' }} tickLine={false} width={70} />
+              <YAxis tick={AXIS_TICK} axisLine={{ stroke: '#c4c7c7' }} tickLine={false} width={56} />
               <Tooltip content={<ChartTooltip />} />
               <Area
                 type="monotone"
@@ -175,8 +249,14 @@ export default function OverviewPage() {
           </ResponsiveContainer>
         </section>
 
-        <div className="grid grid-cols-1 gap-stack_md lg:grid-cols-10">
-          <section className="custom-shadow rounded-lg border border-outline-variant bg-white p-4 sm:p-stack_lg lg:col-span-6">
+        {/* Mobile progress lists (Stitch); desktop Recharts side-by-side */}
+        <div className="mb-stack_lg flex flex-col gap-stack_lg md:hidden">
+          <MobileProgressList title="Top Provinces" items={topProvinces} valueKey="total" />
+          <MobileProgressList title="Top Categories" items={topCategories} valueKey="share" format="percent" />
+        </div>
+
+        <div className="mb-stack_lg hidden grid-cols-1 gap-stack_md lg:grid lg:grid-cols-10">
+          <section className="custom-shadow rounded-lg border border-outline-variant bg-white p-stack_lg lg:col-span-6">
             <h3 className="mb-6 font-headline-sm text-headline-sm">Top Provinces by Admissions</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={topProvinces} layout="vertical" margin={{ left: 8, right: 16 }}>
@@ -200,7 +280,7 @@ export default function OverviewPage() {
             </ResponsiveContainer>
           </section>
 
-          <section className="custom-shadow rounded-lg border border-outline-variant bg-white p-4 sm:p-stack_lg lg:col-span-4">
+          <section className="custom-shadow rounded-lg border border-outline-variant bg-white p-stack_lg lg:col-span-4">
             <h3 className="mb-6 font-headline-sm text-headline-sm">Top Immigration Categories</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={topCategories} layout="vertical" margin={{ left: 8, right: 16 }}>
@@ -219,6 +299,17 @@ export default function OverviewPage() {
               </BarChart>
             </ResponsiveContainer>
           </section>
+        </div>
+
+        {/* Disclaimer — bottom on mobile per Stitch; already shown at top on desktop */}
+        <div className="border-l-[3px] border-primary bg-surface-container-low p-4 md:hidden">
+          <div className="flex gap-3">
+            <span className="material-symbols-outlined mt-0.5 text-[18px] text-primary">info</span>
+            <p className="font-caption text-caption italic leading-relaxed text-on-surface-variant">
+              To prevent identifying individuals, values between 1 and 5 are suppressed. Aggregated totals may not
+              match the sum of individual dimensions due to rounding and suppression protocols.
+            </p>
+          </div>
         </div>
       </main>
     </>
