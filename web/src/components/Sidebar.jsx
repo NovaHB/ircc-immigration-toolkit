@@ -74,6 +74,10 @@ export default function Sidebar({ open = false, onClose }) {
               <span>{dimension.navLabel}</span>
             </NavLink>
           ))}
+          <NavLink to="/invitations" className={navItemClass}>
+            <span className="material-symbols-outlined">mark_email_read</span>
+            <span>By Invitation</span>
+          </NavLink>
         </nav>
 
         <div className="mt-auto border-t border-on-primary/10 px-6 pt-6 md:hidden">

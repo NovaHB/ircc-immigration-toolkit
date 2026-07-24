@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import OverviewPage from './components/OverviewPage'
 import DimensionPage from './components/DimensionPage'
+import InvitationsPage from './components/InvitationsPage'
 import { DIMENSIONS } from './data/mockData'
 import { LayoutProvider } from './layoutContext'
 
@@ -45,6 +46,7 @@ export default function App() {
                 element={<DimensionPage dimension={dimension} />}
               />
             ))}
+            <Route path="/invitations" element={<InvitationsPage />} />
           </Routes>
           <Footer />
         </div>
