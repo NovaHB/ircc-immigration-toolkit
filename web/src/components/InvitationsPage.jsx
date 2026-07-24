@@ -63,19 +63,6 @@ function TabRow({ tabs, active, onSelect }) {
   )
 }
 
-function StatusBanner({ summary, tableCount }) {
-  if (!summary) return null
-  const total = summary.total_candidates
-  const distinct = summary.distinct_values
-  return (
-    <div className="border border-outline-variant bg-white px-4 py-2 font-caption text-caption text-secondary">
-      Top ranks by total invited candidates · table shows highest {tableCount.toLocaleString()} rows
-      {total != null ? ` · ${Number(total).toLocaleString()} total candidates` : ''}
-      {distinct != null ? ` · ${Number(distinct).toLocaleString()} distinct values` : ''}.
-    </div>
-  )
-}
-
 /** Grouped bar chart comparing two totals-by-label series (Invited vs Admitted). */
 function ComparisonChart({ data, loading }) {
   if (loading) {
@@ -350,8 +337,6 @@ export default function InvitationsPage() {
         ) : (
           !error && (
             <>
-              <StatusBanner summary={summary} tableCount={tableRows.length} />
-
               <section className="grid grid-cols-2 gap-3 md:hidden">
                 <div className="border border-outline-variant bg-surface-container-lowest p-4">
                   <span className="mb-1 block font-label-sm text-label-sm uppercase tracking-wider text-secondary">
