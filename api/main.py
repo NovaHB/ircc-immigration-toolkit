@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import admissions
+from routers import admissions, candidates
 
 load_dotenv()
 
@@ -27,6 +27,7 @@ app.add_middleware(
 )
 
 app.include_router(admissions.router)
+app.include_router(candidates.router)
 
 
 @app.get("/")
