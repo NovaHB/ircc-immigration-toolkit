@@ -31,14 +31,18 @@ function buildParams(filters = {}) {
 }
 
 async function apiGet(path, filters = {}) {
-  if (!BASE_URL) throw new Error('VITE_API_BASE_URL is not set')
+  if (!BASE_URL) throw new Error('Failed to load Data')
   const params = buildParams(filters)
   const qs = params.toString()
   const url = `${BASE_URL}${path}${qs ? `?${qs}` : ''}`
-  const res = await fetch(url)
+  let res
+  try {
+    res = await fetch(url)
+  } catch {
+    throw new Error('Failed to load Data')
+  }
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`API ${res.status}: ${text || res.statusText}`)
+    throw new Error('Failed to load Data')
   }
   return res.json()
 }
