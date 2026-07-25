@@ -1,9 +1,12 @@
 import json
 import os
+import time
 
 from fastapi import APIRouter, Query
 from google.cloud import bigquery
 from google.oauth2 import service_account
+
+from .timing import log_timing, run_timed_query, time_json_dumps
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
 
@@ -91,6 +94,7 @@ def query_mart(
     limit / offset are validated ints embedded as LIMIT/OFFSET literals
     (BigQuery does not accept bind params for those clauses).
     """
+    t_start = time.perf_counter()
     client = get_client()
     if sort == "candidates":
         order_by = f"candidates_count DESC, {ORDER_BY_COLUMNS[table]}"
@@ -107,8 +111,27 @@ def query_mart(
     job_config = bigquery.QueryJobConfig(
         query_parameters=_filter_params(province, year, invitation_category)
     )
-    rows = client.query(query, job_config=job_config).result()
-    return [dict(row) for row in rows]
+    rows, timings = run_timed_query(client, query, job_config)
+    result = [dict(row) for row in rows]
+
+    serialize_ms = time_json_dumps(result)
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    log_timing(
+        "list",
+        table,
+        {
+            "province": province,
+            "year": year,
+            "invitation_category": invitation_category,
+            "limit": limit,
+            "offset": offset,
+            "sort": sort,
+        },
+        timings,
+        serialize_ms,
+        total_ms,
+    )
+    return result
 
 
 def query_top_values(
@@ -122,6 +145,7 @@ def query_top_values(
 
     Returns [{ name, total }] ordered by total DESC — not a partial first page.
     """
+    t_start = time.perf_counter()
     client = get_client()
     dim_col = DIMENSION_VALUE_COLUMNS[table]
     query = f"""
@@ -137,8 +161,20 @@ def query_top_values(
     job_config = bigquery.QueryJobConfig(
         query_parameters=_filter_params(province, year, invitation_category)
     )
-    rows = client.query(query, job_config=job_config).result()
-    return [{"name": row["name"] or "—", "total": int(row["total"] or 0)} for row in rows]
+    rows, timings = run_timed_query(client, query, job_config)
+    result = [{"name": row["name"] or "—", "total": int(row["total"] or 0)} for row in rows]
+
+    serialize_ms = time_json_dumps(result)
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    log_timing(
+        "top",
+        table,
+        {"province": province, "year": year, "invitation_category": invitation_category, "limit": limit},
+        timings,
+        serialize_ms,
+        total_ms,
+    )
+    return result
 
 
 def query_yearly_trend(
@@ -153,6 +189,7 @@ def query_yearly_trend(
     monthly /trend — one point per year present in the filtered data (no
     12-point window truncation since there are far fewer years than months).
     """
+    t_start = time.perf_counter()
     client = get_client()
     dim_col = DIMENSION_VALUE_COLUMNS[table]
     query = f"""
@@ -183,14 +220,14 @@ def query_yearly_trend(
     job_config = bigquery.QueryJobConfig(
         query_parameters=_filter_params(province, year, invitation_category)
     )
-    rows = list(client.query(query, job_config=job_config).result())
+    rows, timings = run_timed_query(client, query, job_config)
     shares = []
     for row in rows:
         total = float(row["total"] or 0)
         top_total = float(row["top_total"] or 0)
         shares.append((top_total / total * 100.0) if total > 0 else 0.0)
     national_avg = sum(shares) / len(shares) if shares else 0.0
-    return [
+    result = [
         {
             "year": int(row["year"]),
             "share": round(shares[i], 1),
@@ -198,6 +235,18 @@ def query_yearly_trend(
         }
         for i, row in enumerate(rows)
     ]
+
+    serialize_ms = time_json_dumps(result)
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    log_timing(
+        "trend",
+        table,
+        {"province": province, "year": year, "invitation_category": invitation_category},
+        timings,
+        serialize_ms,
+        total_ms,
+    )
+    return result
 
 
 def query_summary(
@@ -207,6 +256,7 @@ def query_summary(
     invitation_category: str | None,
 ) -> dict:
     """Distinct dimension values + total candidates for the current filters."""
+    t_start = time.perf_counter()
     client = get_client()
     dim_col = DIMENSION_VALUE_COLUMNS[table]
     query = f"""
@@ -220,12 +270,25 @@ def query_summary(
     job_config = bigquery.QueryJobConfig(
         query_parameters=_filter_params(province, year, invitation_category)
     )
-    row = list(client.query(query, job_config=job_config).result())[0]
-    return {
+    rows, timings = run_timed_query(client, query, job_config)
+    row = rows[0]
+    result = {
         "distinct_values": int(row["distinct_values"] or 0),
         "total_candidates": int(row["total_candidates"] or 0),
         "row_count": int(row["row_count"] or 0),
     }
+
+    serialize_ms = time_json_dumps(result)
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    log_timing(
+        "summary",
+        table,
+        {"province": province, "year": year, "invitation_category": invitation_category},
+        timings,
+        serialize_ms,
+        total_ms,
+    )
+    return result
 
 
 LimitParam = Query(100, ge=1, le=1000)
