@@ -73,3 +73,7 @@ def log_timing(op: str, table: str, filters: dict, query_timings: dict, serializ
         serialize_ms,
         total_ms,
     )
+
+
+def log_cache_hit(op: str, table: str, filters: dict, total_ms: float) -> None:
+    logger.info("TIMING op=%s table=%s filters=%s CACHE_HIT total_ms=%s", op, table, filters, total_ms)

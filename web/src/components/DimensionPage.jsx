@@ -5,14 +5,7 @@ import { DimensionSkeleton, ErrorBanner } from './Skeleton'
 import { AXIS_TICK, ChartTooltip, RankedBarList, SuppressionNotice } from './DimensionVisuals'
 import { useLayout } from '../layoutContext'
 import { MONTHS, PROVINCES, YEARS } from '../data/mockData'
-import {
-  DIMENSION_API,
-  fetchAdmissions,
-  fetchShareTrend,
-  fetchSummary,
-  fetchTopValues,
-  mapRows,
-} from '../api/admissions'
+import { DIMENSION_API, fetchPage, mapRows } from '../api/admissions'
 
 const MONTH_NAMES = MONTHS
 
@@ -58,22 +51,16 @@ export default function DimensionPage({ dimension }) {
       if (applied.year !== '') filters.year = Number(applied.year)
       if (applied.month !== '') filters.month = Number(applied.month)
 
-      // Parallel: true top-N + trend + summary and highest rows for table.
-      const [tops, trendRows, summaryRow, detailRaw] = await Promise.all([
-        fetchTopValues(apiMeta.endpoint, filters, 8),
-        fetchShareTrend(apiMeta.endpoint, filters),
-        fetchSummary(apiMeta.endpoint, filters),
-        fetchAdmissions(apiMeta.endpoint, {
-          ...filters,
-          limit: 50,
-          offset: 0,
-          sort: 'admissions',
-        }),
-      ])
-      setTopValues(tops)
-      setTrend(trendRows)
-      setSummary(summaryRow)
-      setTableRows(mapRows(detailRaw, apiMeta.valueField).slice(0, 12))
+      // Single combined request: top + trend + summary + rows in one round trip.
+      const page = await fetchPage(
+        apiMeta.endpoint,
+        { ...filters, limit: 50, offset: 0, sort: 'admissions' },
+        8
+      )
+      setTopValues(page.top)
+      setTrend(page.trend)
+      setSummary(page.summary)
+      setTableRows(mapRows(page.rows, apiMeta.valueField).slice(0, 12))
     } catch {
       setTopValues([])
       setTrend([])

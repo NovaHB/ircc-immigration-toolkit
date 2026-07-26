@@ -5,7 +5,7 @@ import { DimensionSkeleton, ErrorBanner } from './Skeleton'
 import { AXIS_TICK, ChartTooltip, RankedBarList, SuppressionNotice } from './DimensionVisuals'
 import { useLayout } from '../layoutContext'
 import { PROVINCES, YEARS } from '../data/mockData'
-import { CANDIDATE_API, fetchCandidates, fetchShareTrend, fetchSummary, fetchTopValues, mapRows } from '../api/candidates'
+import { CANDIDATE_API, fetchPage, fetchTopValues, mapRows } from '../api/candidates'
 import { fetchTopValues as fetchAdmissionsTopValues } from '../api/admissions'
 
 // One tab per candidates mart. valueLabel drives chart/table headings;
@@ -128,16 +128,16 @@ export default function InvitationsPage() {
         filters.invitation_category = applied.invitationCategory
       }
 
-      const [tops, trendRows, summaryRow, detailRaw] = await Promise.all([
-        fetchTopValues(apiMeta.endpoint, filters, 8),
-        fetchShareTrend(apiMeta.endpoint, filters),
-        fetchSummary(apiMeta.endpoint, filters),
-        fetchCandidates(apiMeta.endpoint, { ...filters, limit: 50, offset: 0, sort: 'candidates' }),
-      ])
-      setTopValues(tops)
-      setTrend(trendRows)
-      setSummary(summaryRow)
-      setTableRows(mapRows(detailRaw, apiMeta.valueField).slice(0, 12))
+      // Single combined request: top + trend + summary + rows in one round trip.
+      const page = await fetchPage(
+        apiMeta.endpoint,
+        { ...filters, limit: 50, offset: 0, sort: 'candidates' },
+        8
+      )
+      setTopValues(page.top)
+      setTrend(page.trend)
+      setSummary(page.summary)
+      setTableRows(mapRows(page.rows, apiMeta.valueField).slice(0, 12))
     } catch {
       setTopValues([])
       setTrend([])

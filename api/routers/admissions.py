@@ -1,12 +1,14 @@
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Query
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
-from .timing import log_timing, run_timed_query, time_json_dumps
+from .cache import cache_get, cache_set, make_key
+from .timing import log_cache_hit, log_timing, run_timed_query, time_json_dumps
 
 router = APIRouter(prefix="/admissions", tags=["admissions"])
 
@@ -96,6 +98,13 @@ def query_mart(
       - "admissions": highest admissions first (still tie-broken by key for stability)
     """
     t_start = time.perf_counter()
+    filters = {"province": province, "year": year, "month": month, "limit": limit, "offset": offset, "sort": sort}
+    cache_key = make_key("list", table, **filters)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        log_cache_hit("list", table, filters, round((time.perf_counter() - t_start) * 1000, 1))
+        return cached
+
     client = get_client()
     if sort == "admissions":
         order_by = f"admissions_count DESC, {ORDER_BY_COLUMNS[table]}"
@@ -121,56 +130,68 @@ def query_mart(
 
     serialize_ms = time_json_dumps(result)
     total_ms = round((time.perf_counter() - t_start) * 1000, 1)
-    log_timing(
-        "list",
-        table,
-        {"province": province, "year": year, "month": month, "limit": limit, "offset": offset, "sort": sort},
-        timings,
-        serialize_ms,
-        total_ms,
-    )
+    log_timing("list", table, filters, timings, serialize_ms, total_ms)
+    cache_set(cache_key, result)
     return result
 
 
-def query_top_values(
+def query_top_and_summary(
     table: str,
     province: str | None,
     year: int | None,
     month: int | None,
-    limit: int,
-) -> list[dict]:
-    """True top-N dimension values by SUM(admissions_count) over the full mart.
-
-    Returns [{ name, total }] ordered by total DESC — not a partial first page.
+    top_limit: int,
+) -> tuple[list[dict], dict]:
+    """Top-N dimension values AND the distinct/total/row-count summary in one
+    BigQuery pass — merges what used to be two separate queries (query_top_values
+    + query_summary) since the summary aggregates are computed over every group
+    regardless of the ARRAY_AGG's own LIMIT, so both can come from a single
+    GROUP BY. Returns (top_list, summary_dict).
     """
     t_start = time.perf_counter()
+    filters = {"province": province, "year": year, "month": month, "top_limit": top_limit}
+    cache_key = make_key("top_summary", table, **filters)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        log_cache_hit("top_summary", table, filters, round((time.perf_counter() - t_start) * 1000, 1))
+        return cached
+
     client = get_client()
     dim_col = DIMENSION_VALUE_COLUMNS[table]
-    # dim_col / limit are from a fixed allow-list / validated int — safe to embed.
+    # dim_col / top_limit are from a fixed allow-list / validated int — safe to embed.
     query = f"""
+        WITH filtered AS (
+          SELECT {dim_col} AS dim_value, admissions_count
+          FROM `{BQ_PROJECT}.{BQ_DATASET}.{table}`
+          {_where_clause()}
+        ),
+        grouped AS (
+          SELECT dim_value AS name, SUM(admissions_count) AS total, COUNT(*) AS cnt
+          FROM filtered
+          GROUP BY name
+        )
         SELECT
-          {dim_col} AS name,
-          SUM(admissions_count) AS total
-        FROM `{BQ_PROJECT}.{BQ_DATASET}.{table}`
-        {_where_clause()}
-        GROUP BY name
-        ORDER BY total DESC, name
-        LIMIT {limit}
+          ARRAY_AGG(STRUCT(name, total) ORDER BY total DESC, name LIMIT {top_limit}) AS top_rows,
+          COUNT(*) AS distinct_values,
+          COALESCE(SUM(total), 0) AS total_admissions,
+          COALESCE(SUM(cnt), 0) AS row_count
+        FROM grouped
     """
     job_config = bigquery.QueryJobConfig(query_parameters=_filter_params(province, year, month))
     rows, timings = run_timed_query(client, query, job_config)
-    result = [{"name": row["name"] or "—", "total": int(row["total"] or 0)} for row in rows]
+    row = rows[0]
+    top = [{"name": r["name"] or "—", "total": int(r["total"] or 0)} for r in (row["top_rows"] or [])]
+    summary = {
+        "distinct_values": int(row["distinct_values"] or 0),
+        "total_admissions": int(row["total_admissions"] or 0),
+        "row_count": int(row["row_count"] or 0),
+    }
+    result = (top, summary)
 
     serialize_ms = time_json_dumps(result)
     total_ms = round((time.perf_counter() - t_start) * 1000, 1)
-    log_timing(
-        "top",
-        table,
-        {"province": province, "year": year, "month": month, "limit": limit},
-        timings,
-        serialize_ms,
-        total_ms,
-    )
+    log_timing("top_summary", table, filters, timings, serialize_ms, total_ms)
+    cache_set(cache_key, result)
     return result
 
 
@@ -185,6 +206,13 @@ def query_share_trend(
     National avg here is the mean of that top-value's monthly share across the window.
     """
     t_start = time.perf_counter()
+    filters = {"province": province, "year": year, "month": month}
+    cache_key = make_key("trend", table, **filters)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        log_cache_hit("trend", table, filters, round((time.perf_counter() - t_start) * 1000, 1))
+        return cached
+
     client = get_client()
     dim_col = DIMENSION_VALUE_COLUMNS[table]
     query = f"""
@@ -240,54 +268,8 @@ def query_share_trend(
 
     serialize_ms = time_json_dumps(result)
     total_ms = round((time.perf_counter() - t_start) * 1000, 1)
-    log_timing(
-        "trend",
-        table,
-        {"province": province, "year": year, "month": month},
-        timings,
-        serialize_ms,
-        total_ms,
-    )
-    return result
-
-
-def query_summary(
-    table: str,
-    province: str | None,
-    year: int | None,
-    month: int | None,
-) -> dict:
-    """Distinct dimension values + total admissions for the current filters."""
-    t_start = time.perf_counter()
-    client = get_client()
-    dim_col = DIMENSION_VALUE_COLUMNS[table]
-    query = f"""
-        SELECT
-          COUNT(DISTINCT {dim_col}) AS distinct_values,
-          COALESCE(SUM(admissions_count), 0) AS total_admissions,
-          COUNT(*) AS row_count
-        FROM `{BQ_PROJECT}.{BQ_DATASET}.{table}`
-        {_where_clause()}
-    """
-    job_config = bigquery.QueryJobConfig(query_parameters=_filter_params(province, year, month))
-    rows, timings = run_timed_query(client, query, job_config)
-    row = rows[0]
-    result = {
-        "distinct_values": int(row["distinct_values"] or 0),
-        "total_admissions": int(row["total_admissions"] or 0),
-        "row_count": int(row["row_count"] or 0),
-    }
-
-    serialize_ms = time_json_dumps(result)
-    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
-    log_timing(
-        "summary",
-        table,
-        {"province": province, "year": year, "month": month},
-        timings,
-        serialize_ms,
-        total_ms,
-    )
+    log_timing("trend", table, filters, timings, serialize_ms, total_ms)
+    cache_set(cache_key, result)
     return result
 
 
@@ -295,6 +277,13 @@ LimitParam = Query(100, ge=1, le=1000)
 OffsetParam = Query(0, ge=0)
 TopLimitParam = Query(10, ge=1, le=50)
 SortParam = Query("key", pattern="^(key|admissions)$")
+# Separate instance from TopLimitParam: FastAPI/Pydantic binds internal
+# metadata (field name/alias) to a Query() object the first time it's used,
+# so reusing the same instance as a default for a *differently-named*
+# parameter (here "top_limit" vs. "limit" on /top) causes it to silently
+# resolve to the other parameter's value. Each distinct parameter name needs
+# its own Query() instance even if the validation rules are identical.
+PageTopLimitParam = Query(8, ge=1, le=50)
 
 # Table registry for the shared top/summary/trend helpers
 MARTS = {
@@ -323,7 +312,8 @@ def _register_dimension_routes(slug: str, table: str) -> None:
         limit: int = TopLimitParam,
         _table: str = table,
     ):
-        return query_top_values(_table, province, year, month, limit)
+        top, _summary = query_top_and_summary(_table, province, year, month, limit)
+        return top
 
     @router.get(f"/{slug}/trend", name=f"trend_{slug}")
     def get_trend(
@@ -341,7 +331,41 @@ def _register_dimension_routes(slug: str, table: str) -> None:
         month: int | None = None,
         _table: str = table,
     ):
-        return query_summary(_table, province, year, month)
+        # top_limit=1: the summary aggregates (distinct/total/row_count) are
+        # computed over every group regardless of the ARRAY_AGG's own LIMIT,
+        # so this only needs the smallest top array, not the caller's N.
+        _top, summary = query_top_and_summary(_table, province, year, month, 1)
+        return summary
+
+    @router.get(f"/{slug}/page", name=f"page_{slug}")
+    def get_page(
+        province: str | None = None,
+        year: int | None = None,
+        month: int | None = None,
+        limit: int = LimitParam,
+        offset: int = OffsetParam,
+        sort: str = SortParam,
+        top_limit: int = PageTopLimitParam,
+        _table: str = table,
+    ):
+        """Combined page load: top + summary (1 query) + trend (1 query) +
+        row list (1 query) = 3 BigQuery queries instead of the 4 a client
+        would otherwise make by hitting /top, /trend, /summary, and the list
+        endpoint separately. Run concurrently via a small thread pool — each
+        is a blocking network call, so this is the same effect the
+        frontend's old Promise.all had across 4 separate requests, just
+        collapsed into 1 HTTP round trip. Without this, chaining the 3
+        queries sequentially would make a cache-miss page load *slower*
+        than the old 4-parallel-request pattern, not faster.
+        """
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            top_summary_future = pool.submit(query_top_and_summary, _table, province, year, month, top_limit)
+            trend_future = pool.submit(query_share_trend, _table, province, year, month)
+            rows_future = pool.submit(query_mart, _table, province, year, month, limit, offset, sort=sort)
+            top, summary = top_summary_future.result()
+            trend = trend_future.result()
+            rows = rows_future.result()
+        return {"top": top, "trend": trend, "summary": summary, "rows": rows}
 
     @router.get(f"/{slug}", name=f"list_{slug}")
     def get_list(

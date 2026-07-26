@@ -27,6 +27,7 @@ function buildParams(filters = {}) {
   if (filters.limit != null) params.set('limit', String(filters.limit))
   if (filters.offset != null) params.set('offset', String(filters.offset))
   if (filters.sort) params.set('sort', filters.sort)
+  if (filters.top_limit != null) params.set('top_limit', String(filters.top_limit))
   return params
 }
 
@@ -114,6 +115,23 @@ export async function fetchSummary(endpoint, filters = {}) {
     province: filters.province,
     year: filters.year,
     month: filters.month,
+  })
+}
+
+/**
+ * Combined page load: { top, trend, summary, rows } in a single request,
+ * replacing 4 separate fetchTopValues/fetchShareTrend/fetchSummary/
+ * fetchAdmissions calls with one round trip.
+ */
+export async function fetchPage(endpoint, filters = {}, topLimit = 8) {
+  return apiGet(`/admissions/${endpoint}/page`, {
+    province: filters.province,
+    year: filters.year,
+    month: filters.month,
+    limit: filters.limit ?? 50,
+    offset: filters.offset ?? 0,
+    sort: filters.sort ?? 'admissions',
+    top_limit: topLimit,
   })
 }
 
