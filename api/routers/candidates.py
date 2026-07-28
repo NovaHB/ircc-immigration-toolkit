@@ -282,6 +282,12 @@ SortParam = Query("key", pattern="^(key|candidates)$")
 # resolve to the other parameter's value. Each distinct parameter name needs
 # its own Query() instance even if the validation rules are identical.
 PageTopLimitParam = Query(8, ge=1, le=50)
+# /page's own "limit" ceiling, deliberately separate from the general-purpose
+# LimitParam above (le=1000). InvitationsPage.jsx always requests limit=50 for
+# /page and candidates.js has no full-table pager (unlike admissions'
+# fetchAdmissionsPages), so nothing here needs more than 50. Capping /page's
+# entry size keeps its cached responses small regardless.
+PageLimitParam = Query(50, ge=1, le=100)
 
 # Table registry for the shared top/summary/trend/list/page helpers.
 MARTS = {
@@ -353,7 +359,7 @@ def _register_dimension_routes(slug: str, table: str) -> None:
         province: str | None = None,
         year: int | None = None,
         invitation_category: str | None = None,
-        limit: int = LimitParam,
+        limit: int = PageLimitParam,
         offset: int = OffsetParam,
         sort: str = SortParam,
         top_limit: int = PageTopLimitParam,

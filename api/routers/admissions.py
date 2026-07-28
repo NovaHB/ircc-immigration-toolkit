@@ -284,6 +284,16 @@ SortParam = Query("key", pattern="^(key|admissions)$")
 # resolve to the other parameter's value. Each distinct parameter name needs
 # its own Query() instance even if the validation rules are identical.
 PageTopLimitParam = Query(8, ge=1, le=50)
+# /page's own "limit" ceiling, deliberately separate from the general-purpose
+# LimitParam above (le=1000). DimensionPage.jsx always requests limit=50 for
+# /page — nothing in the frontend needs more there, and /page responses are
+# cached, so a much smaller ceiling caps the largest cache-entry size /page
+# can produce. LimitParam itself must stay at 1000 on the plain /{slug} list
+# route: OverviewPage.jsx's fetchAdmissionsPages() explicitly pages the whole
+# ~6.4k-row category mart through *that* endpoint at pageSize=1000 (7
+# requests); capping the shared param would silently truncate it instead
+# (maxPages=15 x a smaller limit < the mart's row count).
+PageLimitParam = Query(50, ge=1, le=100)
 
 # Table registry for the shared top/summary/trend helpers
 MARTS = {
@@ -342,7 +352,7 @@ def _register_dimension_routes(slug: str, table: str) -> None:
         province: str | None = None,
         year: int | None = None,
         month: int | None = None,
-        limit: int = LimitParam,
+        limit: int = PageLimitParam,
         offset: int = OffsetParam,
         sort: str = SortParam,
         top_limit: int = PageTopLimitParam,
