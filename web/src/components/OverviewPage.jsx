@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -15,14 +15,7 @@ import Header from './Header'
 import { ErrorBanner, OverviewSkeleton } from './Skeleton'
 import { useLayout } from '../layoutContext'
 import { DIMENSIONS, PROVINCES, YEARS } from '../data/mockData'
-import {
-  DIMENSION_API,
-  fetchAdmissionsPages,
-  getTopCategoriesShare,
-  getTopProvinces,
-  getYearlyTotals,
-  mapRows,
-} from '../api/admissions'
+import { DIMENSION_API, fetchSummary, fetchTopProvinces, fetchTopValues, fetchYearlyTotals } from '../api/admissions'
 
 const AXIS_TICK = { fontFamily: 'Inter', fontSize: 11, fill: '#5e5e5e' }
 const BAR_COLORS = ['#000000', '#5e5e5e', '#000000', '#5e5e5e', '#d4d4d4']
@@ -75,24 +68,45 @@ function MobileProgressList({ title, items, valueKey = 'total', format = 'number
 
 export default function OverviewPage() {
   const { openMenu } = useLayout()
-  const [rows, setRows] = useState([])
+  const [totalAdmissions, setTotalAdmissions] = useState(0)
+  const [topCategories, setTopCategories] = useState([])
+  const [topProvinces, setTopProvinces] = useState([])
+  const [timeSeries, setTimeSeries] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  // 4 small aggregate requests instead of paging the full ~6.4k-row category
+  // mart: /summary and /top already existed (same endpoints DimensionPage
+  // uses); /top-provinces and /yearly-totals are new, purpose-built for
+  // exactly these two charts since no per-dimension endpoint groups by
+  // province or returns a full multi-year total series.
   useEffect(() => {
     let cancelled = false
     async function load() {
       setLoading(true)
       setError(null)
       try {
-        const raw = await fetchAdmissionsPages(DIMENSION_API.category.endpoint, {}, {
-          pageSize: 1000,
-          maxPages: 10,
-        })
-        if (!cancelled) setRows(mapRows(raw, DIMENSION_API.category.valueField))
+        const [summary, categories, provinces, yearly] = await Promise.all([
+          fetchSummary(DIMENSION_API.category.endpoint),
+          fetchTopValues(DIMENSION_API.category.endpoint, {}, 5),
+          fetchTopProvinces(),
+          fetchYearlyTotals(),
+        ])
+        if (!cancelled) {
+          const total = summary?.total_admissions ?? 0
+          setTotalAdmissions(total)
+          setTopCategories(
+            total > 0 ? categories.map((c) => ({ name: c.name, share: (c.total / total) * 100 })) : []
+          )
+          setTopProvinces(provinces.slice(0, 4))
+          setTimeSeries(yearly)
+        }
       } catch {
         if (!cancelled) {
-          setRows([])
+          setTotalAdmissions(0)
+          setTopCategories([])
+          setTopProvinces([])
+          setTimeSeries([])
           setError('Failed to load Data')
         }
       } finally {
@@ -104,14 +118,6 @@ export default function OverviewPage() {
       cancelled = true
     }
   }, [])
-
-  const timeSeries = useMemo(() => getYearlyTotals(rows), [rows])
-  const topProvinces = useMemo(() => getTopProvinces(rows, 4), [rows])
-  const topCategories = useMemo(() => getTopCategoriesShare(rows, 5), [rows])
-  const totalAdmissions = useMemo(
-    () => rows.reduce((sum, r) => sum + r.admissions_count, 0),
-    [rows],
-  )
 
   const summary = {
     totalAdmissions,

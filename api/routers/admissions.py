@@ -394,3 +394,76 @@ def _register_dimension_routes(slug: str, table: str) -> None:
 # by defining them first inside _register_dimension_routes.
 for _slug, _table in MARTS.items():
     _register_dimension_routes(_slug, _table)
+
+
+# ---------------------------------------------------------------------------
+# Overview-only aggregate endpoints.
+#
+# Every admissions mart is a slice of the same underlying data — grouping by
+# province or by year and summing admissions_count gives the same totals
+# regardless of which mart's dimension column you ignore. So these two
+# endpoints query whichever mart is smallest (cheapest to scan), not because
+# the "gender" dimension is meaningful here, purely to minimize bytes
+# processed. mart_admissions_gender (3.8k rows) beats mart_admissions_immcat
+# (6.4k rows) — confirmed by row count, not assumed.
+#
+# These replace OverviewPage.jsx pulling and summing the entire category
+# mart client-side (~6.4k rows over 7 requests) with two small GROUP BYs.
+OVERVIEW_MART = "mart_admissions_gender"
+
+
+@router.get("/top-provinces", name="top_provinces")
+def get_top_provinces():
+    """Top 10 provinces/territories by total admissions, all years/months/
+    dimensions combined. No filter params — OverviewPage never filters."""
+    t_start = time.perf_counter()
+    cache_key = make_key("top_provinces", OVERVIEW_MART)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        log_cache_hit("top_provinces", OVERVIEW_MART, {}, round((time.perf_counter() - t_start) * 1000, 1))
+        return cached
+
+    client = get_client()
+    query = f"""
+        SELECT province_territory AS name, SUM(admissions_count) AS total
+        FROM `{BQ_PROJECT}.{BQ_DATASET}.{OVERVIEW_MART}`
+        GROUP BY name
+        ORDER BY total DESC
+        LIMIT 10
+    """
+    rows, timings = run_timed_query(client, query, bigquery.QueryJobConfig())
+    result = [{"name": r["name"] or "—", "total": int(r["total"] or 0)} for r in rows]
+
+    serialize_ms = time_json_dumps(result)
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    log_timing("top_provinces", OVERVIEW_MART, {}, timings, serialize_ms, total_ms)
+    cache_set(cache_key, result)
+    return result
+
+
+@router.get("/yearly-totals", name="yearly_totals")
+def get_yearly_totals():
+    """Full per-year admissions totals (2015-2026), all provinces/months/
+    dimensions combined. No filter params — OverviewPage never filters."""
+    t_start = time.perf_counter()
+    cache_key = make_key("yearly_totals", OVERVIEW_MART)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        log_cache_hit("yearly_totals", OVERVIEW_MART, {}, round((time.perf_counter() - t_start) * 1000, 1))
+        return cached
+
+    client = get_client()
+    query = f"""
+        SELECT year, SUM(admissions_count) AS total
+        FROM `{BQ_PROJECT}.{BQ_DATASET}.{OVERVIEW_MART}`
+        GROUP BY year
+        ORDER BY year
+    """
+    rows, timings = run_timed_query(client, query, bigquery.QueryJobConfig())
+    result = [{"year": int(r["year"]), "admissions": int(r["total"] or 0)} for r in rows]
+
+    serialize_ms = time_json_dumps(result)
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    log_timing("yearly_totals", OVERVIEW_MART, {}, timings, serialize_ms, total_ms)
+    cache_set(cache_key, result)
+    return result

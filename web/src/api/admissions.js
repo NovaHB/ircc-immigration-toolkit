@@ -68,21 +68,6 @@ export function normalizeRow(row, valueField) {
 }
 
 /**
- * Row-level page. sort=admissions returns highest admissions first (true tops
- * for the detailed table); sort=key is the deterministic pagination order.
- */
-export async function fetchAdmissions(endpoint, filters = {}) {
-  return apiGet(`/admissions/${endpoint}`, {
-    limit: filters.limit ?? 1000,
-    offset: filters.offset ?? 0,
-    sort: filters.sort ?? 'key',
-    province: filters.province,
-    year: filters.year,
-    month: filters.month,
-  })
-}
-
-/**
  * True top-N dimension values from BigQuery GROUP BY … ORDER BY SUM DESC.
  * Not a partial first-page sample.
  */
@@ -99,16 +84,6 @@ export async function fetchTopValues(endpoint, filters = {}, limit = 10) {
   }))
 }
 
-/** Monthly share trend for the overall top dimension value (server-side). */
-export async function fetchShareTrend(endpoint, filters = {}) {
-  const rows = await apiGet(`/admissions/${endpoint}/trend`, {
-    province: filters.province,
-    year: filters.year,
-    month: filters.month,
-  })
-  return rows || []
-}
-
 /** Distinct values + total admissions for current filters (server-side). */
 export async function fetchSummary(endpoint, filters = {}) {
   return apiGet(`/admissions/${endpoint}/summary`, {
@@ -119,9 +94,26 @@ export async function fetchSummary(endpoint, filters = {}) {
 }
 
 /**
+ * Top 10 provinces by total admissions, all dimensions/years/months
+ * combined — server-side GROUP BY, no filter params (Overview never filters).
+ */
+export async function fetchTopProvinces() {
+  const rows = await apiGet('/admissions/top-provinces')
+  return (rows || []).map((r) => ({ name: r.name ?? '—', total: Number(r.total) || 0 }))
+}
+
+/**
+ * Full per-year admissions totals (2015-2026), all dimensions/provinces
+ * combined — server-side GROUP BY, no filter params.
+ */
+export async function fetchYearlyTotals() {
+  const rows = await apiGet('/admissions/yearly-totals')
+  return (rows || []).map((r) => ({ year: String(r.year), admissions: Number(r.admissions) || 0 }))
+}
+
+/**
  * Combined page load: { top, trend, summary, rows } in a single request,
- * replacing 4 separate fetchTopValues/fetchShareTrend/fetchSummary/
- * fetchAdmissions calls with one round trip.
+ * replacing 4 separate top/trend/summary/list calls with one round trip.
  */
 export async function fetchPage(endpoint, filters = {}, topLimit = 8) {
   return apiGet(`/admissions/${endpoint}/page`, {
@@ -135,75 +127,6 @@ export async function fetchPage(endpoint, filters = {}, topLimit = 8) {
   })
 }
 
-/**
- * Page through an endpoint until a short page or maxPages is hit.
- * Used by Overview (category mart is only ~6.4k rows).
- */
-export async function fetchAdmissionsPages(endpoint, filters = {}, { pageSize = 1000, maxPages = 15 } = {}) {
-  const all = []
-  for (let page = 0; page < maxPages; page++) {
-    const batch = await fetchAdmissions(endpoint, {
-      ...filters,
-      limit: pageSize,
-      offset: page * pageSize,
-      sort: filters.sort ?? 'key',
-    })
-    if (!Array.isArray(batch) || batch.length === 0) break
-    all.push(...batch)
-    if (batch.length < pageSize) break
-  }
-  return all
-}
-
 export function mapRows(rawRows, valueField) {
   return (rawRows || []).map((row) => normalizeRow(row, valueField))
-}
-
-// --- Client-side aggregations (Overview still pages the full category mart) ---
-
-export function getTopValues(rows, limit = 5) {
-  const totals = new Map()
-  for (const row of rows) {
-    totals.set(row.dimension_value, (totals.get(row.dimension_value) || 0) + row.admissions_count)
-  }
-  return [...totals.entries()]
-    .map(([name, total]) => ({ name, total }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, limit)
-}
-
-export function getYearlyTotals(rows) {
-  const byYear = new Map()
-  for (const row of rows) {
-    byYear.set(row.year, (byYear.get(row.year) || 0) + row.admissions_count)
-  }
-  return [...byYear.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([year, admissions]) => ({ year: String(year), admissions }))
-}
-
-export function getTopProvinces(rows, limit = 4) {
-  const totals = new Map()
-  for (const row of rows) {
-    totals.set(row.province, (totals.get(row.province) || 0) + row.admissions_count)
-  }
-  return [...totals.entries()]
-    .map(([name, total]) => ({ name, total }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, limit)
-}
-
-export function getTopCategoriesShare(rows, limit = 5) {
-  const totals = new Map()
-  let grand = 0
-  for (const row of rows) {
-    const v = row.admissions_count
-    grand += v
-    totals.set(row.dimension_value, (totals.get(row.dimension_value) || 0) + v)
-  }
-  if (grand === 0) return []
-  return [...totals.entries()]
-    .map(([name, total]) => ({ name, share: (total / grand) * 100 }))
-    .sort((a, b) => b.share - a.share)
-    .slice(0, limit)
 }

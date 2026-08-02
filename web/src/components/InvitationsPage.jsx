@@ -112,10 +112,18 @@ export default function InvitationsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const load = useCallback(async () => {
+  // isCancelled is checked before every state update so a slower, stale
+  // request can't overwrite a newer one's results — same pattern
+  // OverviewPage uses. Matters more here than on DimensionPage: switching
+  // tabs re-triggers this effect too (apiMeta/tabConfig change with
+  // activeTab), and tab clicks happen faster than most people re-apply
+  // filters.
+  const load = useCallback(async (isCancelled) => {
     if (!apiMeta) {
-      setError('Failed to load Data')
-      setLoading(false)
+      if (!isCancelled()) {
+        setError('Failed to load Data')
+        setLoading(false)
+      }
       return
     }
     setLoading(true)
@@ -134,23 +142,31 @@ export default function InvitationsPage() {
         { ...filters, limit: 50, offset: 0, sort: 'candidates' },
         8
       )
-      setTopValues(page.top)
-      setTrend(page.trend)
-      setSummary(page.summary)
-      setTableRows(mapRows(page.rows, apiMeta.valueField).slice(0, 12))
+      if (!isCancelled()) {
+        setTopValues(page.top)
+        setTrend(page.trend)
+        setSummary(page.summary)
+        setTableRows(mapRows(page.rows, apiMeta.valueField).slice(0, 12))
+      }
     } catch {
-      setTopValues([])
-      setTrend([])
-      setTableRows([])
-      setSummary(null)
-      setError('Failed to load Data')
+      if (!isCancelled()) {
+        setTopValues([])
+        setTrend([])
+        setTableRows([])
+        setSummary(null)
+        setError('Failed to load Data')
+      }
     } finally {
-      setLoading(false)
+      if (!isCancelled()) setLoading(false)
     }
   }, [apiMeta, applied, tabConfig])
 
   useEffect(() => {
-    load()
+    let cancelled = false
+    load(() => cancelled)
+    return () => {
+      cancelled = true
+    }
   }, [load])
 
   // --- Fixed "Invited vs Admitted" comparison section (independent of the active tab) ---
@@ -158,7 +174,7 @@ export default function InvitationsPage() {
   const [citizenshipComparison, setCitizenshipComparison] = useState([])
   const [comparisonLoading, setComparisonLoading] = useState(true)
 
-  const loadComparisons = useCallback(async () => {
+  const loadComparisons = useCallback(async (isCancelled) => {
     setComparisonLoading(true)
     const filters = {}
     if (applied.province) filters.province = applied.province
@@ -171,6 +187,7 @@ export default function InvitationsPage() {
         fetchTopValues('citizenship', filters, 20),
         fetchAdmissionsTopValues('citizenship', filters, 20),
       ])
+      if (isCancelled()) return
 
       const categoryTotals = new Map()
       for (const { name, total } of invitedByCategory) {
@@ -213,15 +230,21 @@ export default function InvitationsPage() {
           .slice(0, 8)
       )
     } catch {
-      setCategoryComparison([])
-      setCitizenshipComparison([])
+      if (!isCancelled()) {
+        setCategoryComparison([])
+        setCitizenshipComparison([])
+      }
     } finally {
-      setComparisonLoading(false)
+      if (!isCancelled()) setComparisonLoading(false)
     }
   }, [applied])
 
   useEffect(() => {
-    loadComparisons()
+    let cancelled = false
+    loadComparisons(() => cancelled)
+    return () => {
+      cancelled = true
+    }
   }, [loadComparisons])
 
   const maxTop = Math.max(...topValues.map((t) => t.total), 1)

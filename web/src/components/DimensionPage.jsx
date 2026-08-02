@@ -37,10 +37,16 @@ export default function DimensionPage({ dimension }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const load = useCallback(async () => {
+  // isCancelled is checked before every state update so a slower, stale
+  // request (e.g. the previous filter combo, still in flight when the user
+  // applies a new one) can never overwrite the results of a newer request —
+  // same pattern OverviewPage already uses for its own fetch.
+  const load = useCallback(async (isCancelled) => {
     if (!apiMeta) {
-      setError('Failed to load Data')
-      setLoading(false)
+      if (!isCancelled()) {
+        setError('Failed to load Data')
+        setLoading(false)
+      }
       return
     }
     setLoading(true)
@@ -57,23 +63,31 @@ export default function DimensionPage({ dimension }) {
         { ...filters, limit: 50, offset: 0, sort: 'admissions' },
         8
       )
-      setTopValues(page.top)
-      setTrend(page.trend)
-      setSummary(page.summary)
-      setTableRows(mapRows(page.rows, apiMeta.valueField).slice(0, 12))
+      if (!isCancelled()) {
+        setTopValues(page.top)
+        setTrend(page.trend)
+        setSummary(page.summary)
+        setTableRows(mapRows(page.rows, apiMeta.valueField).slice(0, 12))
+      }
     } catch {
-      setTopValues([])
-      setTrend([])
-      setTableRows([])
-      setSummary(null)
-      setError('Failed to load Data')
+      if (!isCancelled()) {
+        setTopValues([])
+        setTrend([])
+        setTableRows([])
+        setSummary(null)
+        setError('Failed to load Data')
+      }
     } finally {
-      setLoading(false)
+      if (!isCancelled()) setLoading(false)
     }
   }, [apiMeta, applied, dimension.key])
 
   useEffect(() => {
-    load()
+    let cancelled = false
+    load(() => cancelled)
+    return () => {
+      cancelled = true
+    }
   }, [load])
 
   const uniqueValues = summary?.distinct_values ?? 0

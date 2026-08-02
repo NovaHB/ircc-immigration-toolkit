@@ -64,21 +64,6 @@ export function normalizeRow(row, valueField) {
 }
 
 /**
- * Row-level page. sort=candidates returns highest candidates_count first
- * (true tops for the detailed table); sort=key is deterministic pagination.
- */
-export async function fetchCandidates(endpoint, filters = {}) {
-  return apiGet(`/candidates/${endpoint}`, {
-    limit: filters.limit ?? 1000,
-    offset: filters.offset ?? 0,
-    sort: filters.sort ?? 'key',
-    province: filters.province,
-    year: filters.year,
-    invitation_category: filters.invitation_category,
-  })
-}
-
-/**
  * True top-N dimension values from BigQuery GROUP BY … ORDER BY SUM DESC.
  * Not a partial first-page sample.
  */
@@ -95,33 +80,9 @@ export async function fetchTopValues(endpoint, filters = {}, limit = 10) {
   }))
 }
 
-/** Yearly share trend for the overall top dimension value (server-side). */
-export async function fetchShareTrend(endpoint, filters = {}) {
-  const rows = await apiGet(`/candidates/${endpoint}/trend`, {
-    province: filters.province,
-    year: filters.year,
-    invitation_category: filters.invitation_category,
-  })
-  return (rows || []).map((r) => ({
-    year: String(r.year),
-    share: r.share,
-    nationalAvg: r.nationalAvg,
-  }))
-}
-
-/** Distinct values + total candidates for current filters (server-side). */
-export async function fetchSummary(endpoint, filters = {}) {
-  return apiGet(`/candidates/${endpoint}/summary`, {
-    province: filters.province,
-    year: filters.year,
-    invitation_category: filters.invitation_category,
-  })
-}
-
 /**
  * Combined page load: { top, trend, summary, rows } in a single request,
- * replacing 4 separate fetchTopValues/fetchShareTrend/fetchSummary/
- * fetchCandidates calls with one round trip.
+ * replacing 4 separate top/trend/summary/list calls with one round trip.
  */
 export async function fetchPage(endpoint, filters = {}, topLimit = 8) {
   return apiGet(`/candidates/${endpoint}/page`, {
